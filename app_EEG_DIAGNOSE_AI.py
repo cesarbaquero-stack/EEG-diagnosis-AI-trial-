@@ -21,24 +21,22 @@ Esta aplicación utiliza una **Red Neuronal Convolucional (EEGNet)** para analiz
 El sistema escanea la señal buscando patrones convulsivos y genera una línea de tiempo de probabilidades.
 """)
 
-# --- PARÁMETROS DEL MODELO (Actualizados al error) ---
+# --- PARÁMETROS DEL MODELO (Actualizados) ---
 FS = 256            
 DURATION = 5.0      
-N_CHANNELS = 28     # <--- CAMBIO: Tu modelo pide 28, no 23
-POINTS = 1281       # <--- CAMBIO: Tu modelo pide 1281, no 1280
+N_CHANNELS = 28     # Tu modelo pide 28
+POINTS = 1281       # Tu modelo pide 1281
 
 # ==========================================
-# 2. CARGA DEL MODELO (Optimizado para Nube)
+# 2. CARGA DEL MODELO (Optimizado)
 # ==========================================
 @st.cache_resource
 def load_model():
-    # --- CAMBIO AQUÍ: Pon el nombre EXACTO del archivo subido ---
     model_path = 'modelo_ligero.h5'  
     
     if not os.path.exists(model_path):
         st.error(f"⚠️ Error Crítico: No encuentro el archivo '{model_path}'.")
         return None
-    # ... resto del código ...
     
     try:
         model = tf.keras.models.load_model(model_path)
@@ -50,33 +48,33 @@ def load_model():
 model = load_model()
 
 # ==========================================
-# 3. PRE-PROCESAMIENTO (Espejo del Entrenamiento)
+# 3. PRE-PROCESAMIENTO
 # ==========================================
 def preprocess_window(data_window):
     """
-    Prepara una ventana de 5 segundos para que la IA la entienda.
-    Aplica: Padding de canales, Clip de artefactos y Escalado Fijo.
+    Prepara una ventana: Padding a (28, 1281), Clip y Escalado Fijo (/100).
     """
-    # A. Ajuste de Canales (Debe tener 23)
+    # A. Ajuste de Canales (Padding hasta 28)
     current_channels = data_window.shape[0]
-    
-    if current_channels > N_CHANNELS:
-        data_window = data_window[:N_CHANNELS, :]
-    elif current_channels < N_CHANNELS:
-        # Rellenar con ceros si faltan canales
+    if current_channels < N_CHANNELS:
         pad = np.zeros((N_CHANNELS - current_channels, data_window.shape[1]))
         data_window = np.concatenate([data_window, pad], axis=0)
+    elif current_channels > N_CHANNELS:
+        data_window = data_window[:N_CHANNELS, :]
     
-    # B. Limpieza de Artefactos (Clip)
-    # Elimina picos locos de movimiento mayores a 500 uV
+    # B. Ajuste de Tiempo (Padding hasta 1281)
+    current_points = data_window.shape[1]
+    if current_points < POINTS:
+        pad_time = np.zeros((data_window.shape[0], POINTS - current_points))
+        data_window = np.concatenate([data_window, pad_time], axis=1)
+    elif current_points > POINTS:
+        data_window = data_window[:, :POINTS]
+
+    # C. Limpieza y Escalado (Igual al entrenamiento)
     data_window = np.clip(data_window, -500, 500)
-    
-    # C. Escalado Fijo (LA CLAVE DEL ÉXITO)
-    # Dividimos por 100 uV para mantener la relación física de la señal
     data_window = data_window / 100.0
     
-    # D. Formato de Imagen para Keras (Batch, Alto, Ancho, Color)
-    # Entrada esperada: (1, 23, 1280, 1)
+    # D. Formato de Imagen 4D
     data_window = data_window[np.newaxis, ..., np.newaxis]
     
     return data_window
@@ -89,8 +87,7 @@ uploaded_file = st.file_uploader("Sube tu archivo .EDF aquí", type=["edf"])
 if uploaded_file is not None and model is not None:
     st.success("Archivo recibido. Iniciando procesamiento...")
     
-    # MNE necesita leer desde un archivo físico en disco, no desde memoria RAM.
-    # Creamos un archivo temporal para engañarlo.
+    # Archivo temporal para MNE
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".edf")
     tfile.write(uploaded_file.read())
     tfile.close() 
@@ -101,119 +98,51 @@ if uploaded_file is not None and model is not None:
             raw = mne.io.read_raw_edf(tfile.name, preload=True, verbose=False)
             
             # 1. CONVERTIR A MICROVOLTIOS (CRÍTICO)
-            # MNE carga en Volts. Multiplicamos por 1 millón.
             raw.apply_function(lambda x: x * 1e6)
             
             # 2. Filtros Estándar
-            raw.notch_filter(60, verbose=False)        # Ruido eléctrico
-            raw.filter(1.0, 40.0, verbose=False)       # Frecuencias cerebrales
+            raw.notch_filter(60, verbose=False)
+            raw.filter(1.0, 40.0, verbose=False)
             
-            # 3. Resampleo (si el archivo no es de 256Hz)
+            # 3. Resampleo
             if raw.info['sfreq'] != FS:
                 raw.resample(FS, verbose=False)
             
-            # 4. Referencia Promedio (CAR)
+            # 4. Referencia Promedio
             raw.set_eeg_reference('average', projection=True, verbose=False)
             raw.apply_proj()
         
         # --- PASO 2: SEGMENTACIÓN Y PREDICCIÓN ---
-        data = raw.get_data() # (Canales, Tiempo Total)
+        data = raw.get_data() 
         total_seconds = data.shape[1] / FS
         num_windows = int(total_seconds / DURATION)
         
-        st.write(f"📊 **Análisis Técnico:**")
-        st.write(f"- Duración Total: `{total_seconds:.2f} segundos`")
-        st.write(f"- Ventanas a analizar: `{num_windows}`")
+        st.write(f"📊 **Análisis Técnico:** Duración: `{total_seconds:.2f}s` | Ventanas: `{num_windows}`")
         
         progress_bar = st.progress(0)
         predictions = []
         times_sec = []
         
         status_text = st.empty()
-        status_text.text("🧠 La IA está escaneando el cerebro...")
+        status_text.text("🧠 Escaneando cerebro...")
         
         for i in range(num_windows):
             start_idx = int(i * DURATION * FS)
             end_idx = int((i + 1) * DURATION * FS)
             
-            # Extraer ventana
             window = data[:, start_idx:end_idx]
             
-            # Verificar tamaño exacto (a veces la última ventana queda corta)
-            if window.shape[1] == POINTS:
-                # Pre-procesar (Padding + Clip + Scale)
+            # Verificar que la ventana tenga datos suficientes para procesar
+            if window.shape[1] > 0:
                 processed_window = preprocess_window(window)
-                # --- DEBUG VISUAL (Borrar luego) ---
-# Solo mostramos la primera ventana para ver si la señal está viva
-if i == 0:
-    st.write("### 🕵️‍♂️ Diagnóstico de Rayos X")
-    # Quitamos dimensiones extra para graficar: (1, 28, 1281, 1) -> (28, 1281)
-    debug_signal = processed_window[0, :, :, 0]
-    
-    st.write(f"**Rango de Valores:** Min {debug_signal.min():.2f} | Max {debug_signal.max():.2f}")
-    
-    fig_debug, ax_debug = plt.subplots(figsize=(10, 3))
-    # Graficamos el primer canal
-    ax_debug.plot(debug_signal[0, :])
-    ax_debug.set_title("Lo que ve la IA (Canal 1)")
-    st.pyplot(fig_debug)
-    
-    if debug_signal.max() < 0.1:
-        st.error("🚨 ALERTA: La IA está viendo una línea plana. Error de Escala.")
-    else:
-        st.success("✅ La señal tiene amplitud correcta.")
-                # Predecir
-                pred_prob = model.predict(processed_window, verbose=0)[0][0]
-                predictions.append(pred_prob)
-                times_sec.append(i * DURATION)
-            
-            # Actualizar barra de progreso
-            if i % 5 == 0:
-                progress_bar.progress(min(i / num_windows, 1.0))
-        
-        progress_bar.progress(1.0)
-        status_text.text("✅ Análisis finalizado.")
-        
-        # --- PASO 3: VISUALIZACIÓN ---
-        predictions = np.array(predictions)
-        
-        # Slider para que el médico ajuste la sensibilidad
-        threshold = st.slider("Ajustar Umbral de Sensibilidad", 0.0, 1.0, 0.5, 0.05, 
-                              help="Si bajas el umbral, detectará más crisis pero podría haber falsas alarmas.")
-        
-        is_seizure = predictions > threshold
-        
-        # Gráfica
-        fig, ax = plt.subplots(figsize=(12, 4))
-        ax.plot(times_sec, predictions, color='#2c3e50', label='Probabilidad IA', linewidth=1)
-        
-        # Rellenar zonas de crisis
-        ax.fill_between(times_sec, 0, 1, where=is_seizure, color='#e74c3c', alpha=0.3, label='Crisis Detectada')
-        
-        ax.axhline(threshold, color='#3498db', linestyle='--', label=f'Umbral ({threshold})')
-        ax.set_title("Línea de Tiempo de Probabilidad de Crisis", fontsize=14)
-        ax.set_ylabel("Probabilidad (0-1)")
-        ax.set_xlabel("Tiempo (segundos)")
-        ax.set_ylim(0, 1.05)
-        ax.legend(loc="upper right")
-        
-        st.pyplot(fig)
-        
-        # Resumen numérico
-        total_time_seizure = np.sum(is_seizure) * DURATION
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if total_time_seizure > 0:
-                st.error(f"⚠️ **ALERTA:** Se detectaron patrones compatibles con epilepsia.")
-            else:
-                st.success(f"✅ **NORMAL:** No se detectaron eventos de crisis.")
                 
-        with col2:
-            st.metric("Tiempo Total de Crisis", f"{total_time_seizure:.1f} s")
-
-    except Exception as e:
-        st.error(f"Ocurrió un error procesando el archivo: {e}")
-    finally:
-        # Limpieza del archivo temporal
-        os.unlink(tfile.name)
+                # --- DEBUG VISUAL (Solo primera ventana) ---
+                if i == 0:
+                    st.write("### 🕵️‍♂️ Diagnóstico de Rayos X")
+                    debug_signal = processed_window[0, :, :, 0]
+                    st.write(f"**Rango de Valores (IA):** Min {debug_signal.min():.2f} | Max {debug_signal.max():.2f}")
+                    
+                    fig_debug, ax_debug = plt.subplots(figsize=(10, 2))
+                    ax_debug.plot(debug_signal[0, :])
+                    ax_debug.set_title("Señal vista por la IA (Canal 1)")
+                    st.pyplot(fig_debug)
