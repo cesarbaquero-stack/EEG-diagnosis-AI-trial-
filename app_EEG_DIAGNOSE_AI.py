@@ -32,12 +32,13 @@ POINTS = int(FS * DURATION) # 1280 puntos
 # ==========================================
 @st.cache_resource
 def load_model():
-    # Buscamos el modelo en la misma carpeta del script
-    model_path = 'modelo_ligero.h5'
+    # --- CAMBIO AQUÍ: Pon el nombre EXACTO del archivo subido ---
+    model_path = 'modelo_ligero.h5'  
     
     if not os.path.exists(model_path):
-        st.error(f"⚠️ Error Crítico: No encuentro el archivo '{model_path}'. Asegúrate de subirlo a GitHub junto con este código.")
+        st.error(f"⚠️ Error Crítico: No encuentro el archivo '{model_path}'.")
         return None
+    # ... resto del código ...
     
     try:
         model = tf.keras.models.load_model(model_path)
