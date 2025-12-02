@@ -21,11 +21,11 @@ Esta aplicación utiliza una **Red Neuronal Convolucional (EEGNet)** para analiz
 El sistema escanea la señal buscando patrones convulsivos y genera una línea de tiempo de probabilidades.
 """)
 
-# --- PARÁMETROS DEL MODELO (Deben coincidir con tu entrenamiento) ---
-FS = 256            # Frecuencia de muestreo
-DURATION = 5.0      # Segundos por ventana
-N_CHANNELS = 23     # Canales que espera la IA
-POINTS = int(FS * DURATION) # 1280 puntos
+# --- PARÁMETROS DEL MODELO (Actualizados al error) ---
+FS = 256            
+DURATION = 5.0      
+N_CHANNELS = 28     # <--- CAMBIO: Tu modelo pide 28, no 23
+POINTS = 1281       # <--- CAMBIO: Tu modelo pide 1281, no 1280
 
 # ==========================================
 # 2. CARGA DEL MODELO (Optimizado para Nube)
