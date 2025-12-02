@@ -143,7 +143,25 @@ if uploaded_file is not None and model is not None:
             if window.shape[1] == POINTS:
                 # Pre-procesar (Padding + Clip + Scale)
                 processed_window = preprocess_window(window)
-                
+                # --- DEBUG VISUAL (Borrar luego) ---
+# Solo mostramos la primera ventana para ver si la señal está viva
+if i == 0:
+    st.write("### 🕵️‍♂️ Diagnóstico de Rayos X")
+    # Quitamos dimensiones extra para graficar: (1, 28, 1281, 1) -> (28, 1281)
+    debug_signal = processed_window[0, :, :, 0]
+    
+    st.write(f"**Rango de Valores:** Min {debug_signal.min():.2f} | Max {debug_signal.max():.2f}")
+    
+    fig_debug, ax_debug = plt.subplots(figsize=(10, 3))
+    # Graficamos el primer canal
+    ax_debug.plot(debug_signal[0, :])
+    ax_debug.set_title("Lo que ve la IA (Canal 1)")
+    st.pyplot(fig_debug)
+    
+    if debug_signal.max() < 0.1:
+        st.error("🚨 ALERTA: La IA está viendo una línea plana. Error de Escala.")
+    else:
+        st.success("✅ La señal tiene amplitud correcta.")
                 # Predecir
                 pred_prob = model.predict(processed_window, verbose=0)[0][0]
                 predictions.append(pred_prob)
