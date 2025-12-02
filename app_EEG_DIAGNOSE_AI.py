@@ -33,7 +33,7 @@ POINTS = int(FS * DURATION) # 1280 puntos
 @st.cache_resource
 def load_model():
     # Buscamos el modelo en la misma carpeta del script
-    model_path = 'modelo_final_epilepsia.h5'
+    model_path = 'modelo_ligero.h5'
     
     if not os.path.exists(model_path):
         st.error(f"⚠️ Error Crítico: No encuentro el archivo '{model_path}'. Asegúrate de subirlo a GitHub junto con este código.")
