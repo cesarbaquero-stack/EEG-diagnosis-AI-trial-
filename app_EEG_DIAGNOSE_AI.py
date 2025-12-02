@@ -21,14 +21,14 @@ Esta aplicación utiliza una **Red Neuronal Convolucional (EEGNet)** para analiz
 El sistema escanea la señal buscando patrones convulsivos y genera una línea de tiempo de probabilidades.
 """)
 
-# --- PARÁMETROS DEL MODELO (Actualizados) ---
+# --- PARÁMETROS DEL MODELO ---
 FS = 256            
 DURATION = 5.0      
-N_CHANNELS = 28     # Tu modelo pide 28
-POINTS = 1281       # Tu modelo pide 1281
+N_CHANNELS = 28     # Tu modelo pide 28 canales
+POINTS = 1281       # Tu modelo pide 1281 puntos
 
 # ==========================================
-# 2. CARGA DEL MODELO (Optimizado)
+# 2. CARGA DEL MODELO
 # ==========================================
 @st.cache_resource
 def load_model():
@@ -70,7 +70,7 @@ def preprocess_window(data_window):
     elif current_points > POINTS:
         data_window = data_window[:, :POINTS]
 
-    # C. Limpieza y Escalado (Igual al entrenamiento)
+    # C. Limpieza y Escalado
     data_window = np.clip(data_window, -500, 500)
     data_window = data_window / 100.0
     
@@ -92,12 +92,13 @@ if uploaded_file is not None and model is not None:
     tfile.write(uploaded_file.read())
     tfile.close() 
     
+    # --- AQUÍ EMPIEZA EL BLOQUE TRY ---
     try:
         # --- PASO 1: CARGA Y LIMPIEZA ---
         with st.spinner('Filtrando ruido y estandarizando señal...'):
             raw = mne.io.read_raw_edf(tfile.name, preload=True, verbose=False)
             
-            # 1. CONVERTIR A MICROVOLTIOS (CRÍTICO)
+            # 1. CONVERTIR A MICROVOLTIOS
             raw.apply_function(lambda x: x * 1e6)
             
             # 2. Filtros Estándar
@@ -126,19 +127,21 @@ if uploaded_file is not None and model is not None:
         status_text = st.empty()
         status_text.text("🧠 Escaneando cerebro...")
         
+        # Bucle de ventanas
         for i in range(num_windows):
             start_idx = int(i * DURATION * FS)
             end_idx = int((i + 1) * DURATION * FS)
             
             window = data[:, start_idx:end_idx]
             
-            # Verificar que la ventana tenga datos suficientes para procesar
+            # Verificar datos suficientes
             if window.shape[1] > 0:
                 processed_window = preprocess_window(window)
                 
                 # --- DEBUG VISUAL (Solo primera ventana) ---
                 if i == 0:
                     st.write("### 🕵️‍♂️ Diagnóstico de Rayos X")
+                    # Quitamos dims extra para graficar
                     debug_signal = processed_window[0, :, :, 0]
                     st.write(f"**Rango de Valores (IA):** Min {debug_signal.min():.2f} | Max {debug_signal.max():.2f}")
                     
@@ -146,3 +149,55 @@ if uploaded_file is not None and model is not None:
                     ax_debug.plot(debug_signal[0, :])
                     ax_debug.set_title("Señal vista por la IA (Canal 1)")
                     st.pyplot(fig_debug)
+                    
+                    if np.max(np.abs(debug_signal)) < 0.1:
+                        st.error("🚨 ALERTA: Señal plana. Revisa la conversión de microvoltios.")
+                    else:
+                        st.success("✅ Amplitud correcta.")
+
+                # Predecir
+                pred_prob = model.predict(processed_window, verbose=0)[0][0]
+                predictions.append(pred_prob)
+                times_sec.append(i * DURATION)
+            
+            if i % 10 == 0:
+                progress_bar.progress(min(i / num_windows, 1.0))
+        
+        progress_bar.progress(1.0)
+        status_text.text("✅ Análisis finalizado.")
+        
+        # --- PASO 3: VISUALIZACIÓN ---
+        predictions = np.array(predictions)
+        
+        threshold = st.slider("Ajustar Umbral de Sensibilidad", 0.0, 1.0, 0.5, 0.05)
+        is_seizure = predictions > threshold
+        
+        fig, ax = plt.subplots(figsize=(12, 4))
+        ax.plot(times_sec, predictions, color='#2c3e50', label='Probabilidad', linewidth=1)
+        ax.fill_between(times_sec, 0, 1, where=is_seizure, color='#e74c3c', alpha=0.3, label='Crisis')
+        ax.axhline(threshold, color='#3498db', linestyle='--', label=f'Umbral ({threshold})')
+        ax.set_title("Línea de Tiempo de Probabilidad")
+        ax.set_ylabel("Probabilidad")
+        ax.set_xlabel("Tiempo (s)")
+        ax.set_ylim(0, 1.05)
+        ax.legend(loc="upper right")
+        
+        st.pyplot(fig)
+        
+        total_time_seizure = np.sum(is_seizure) * DURATION
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if total_time_seizure > 0:
+                st.error(f"⚠️ **ALERTA:** Se detectaron patrones de crisis.")
+            else:
+                st.success(f"✅ **NORMAL:** No se detectaron crisis.")
+        with col2:
+            st.metric("Tiempo Total de Crisis", f"{total_time_seizure:.1f} s")
+
+    # --- AQUÍ ESTÁN EL EXCEPT Y FINALLY QUE FALTABAN ---
+    except Exception as e:
+        st.error(f"Ocurrió un error: {e}")
+    finally:
+        try: os.unlink(tfile.name)
+        except: pass
